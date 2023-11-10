@@ -7,7 +7,13 @@ from tqdm import tqdm
 
 
 def generate_attention_mask(size, device="cpu"):
-    return torch.tril(torch.ones(size, size, device=device))
+    mask = torch.tril(torch.ones(size, size, device=device))
+    mask = (
+        mask.float()
+        .masked_fill(mask == 0, float("-inf"))
+        .masked_fill(mask == 1, float(0.0))
+    )
+    return mask
 
 
 # useful utility class for computing averages
@@ -35,9 +41,10 @@ def train_epoch(model, optimizer, tokenizer, loader, scheduler=None, device="cpu
     loss_m = AverageMeter()
     epoch_lrs = []
     criterion = nn.CrossEntropyLoss(ignore_index=0)
+    loss = 0
     for stories in tqdm(loader):
         tokens_story = [
-            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)
+            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)[:256]
             for story in stories
         ]
         padded_tokens_story = nn.utils.rnn.pad_sequence(
@@ -51,12 +58,12 @@ def train_epoch(model, optimizer, tokenizer, loader, scheduler=None, device="cpu
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        # update stats
         loss_m.update(loss.item(), padded_tokens_story.shape[0])
         epoch_lrs += [optimizer.param_groups[0]["lr"]]
-        # we use step-wise scheduler
         if scheduler is not None:
             scheduler.step()
+        # update stats
+        # we use step-wise scheduler
     return loss_m.avg, epoch_lrs
 
 
@@ -67,7 +74,7 @@ def val_epoch(model, tokenizer, loader, device="cpu"):
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     for stories in tqdm(loader):
         tokens_story = [
-            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)
+            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)[:256]
             for story in stories
         ]
         padded_tokens_story = nn.utils.rnn.pad_sequence(
