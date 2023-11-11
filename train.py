@@ -7,13 +7,13 @@ from tqdm import tqdm
 
 
 def generate_attention_mask(size, device="cpu"):
-    mask = torch.tril(torch.ones(size, size, device=device))
+    mask = torch.tril(torch.ones(size, size, device=device, dtype=torch.bfloat16))
     mask = (
         mask.float()
         .masked_fill(mask == 0, float("-inf"))
         .masked_fill(mask == 1, float(0.0))
     )
-    return mask
+    return mask.to(torch.bfloat16)
 
 
 # useful utility class for computing averages

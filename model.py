@@ -1,7 +1,6 @@
 import math
 import torch
 from torch import nn as nn
-from torch.nn import functional as F
 
 
 class PositionalEncoding(nn.Module):
@@ -15,13 +14,13 @@ class PositionalEncoding(nn.Module):
         # TODO
         # here should be a tensor of size (1, max_len, embed_dim), dummy dimension is needed for proper addition
         pe = torch.empty(max_len, embed_dim)
-        positions = torch.arange(0, max_len).unsqueeze(1)
+        positions = torch.arange(0, max_len, dtype=torch.bfloat16).unsqueeze(1)
         indices = torch.exp(
-            torch.arange(0, embed_dim, 2).unsqueeze(0) * -math.log(max_len) / embed_dim
+            torch.arange(0, embed_dim, 2, dtype=torch.bfloat16).unsqueeze(0) * -math.log(max_len) / embed_dim
         ).unsqueeze(0)
         pe[:, ::2] = torch.sin(positions * indices)
         pe[:, 1::2] = torch.cos(positions * indices)
-        pe = pe.unsqueeze(0)
+        pe = pe.to(torch.bfloat16).unsqueeze(0)
 
         # register_buffer => Tensor which is not a parameter, but should be part of the modules state.
         # Used for tensors that need to be on the same device as the module.
@@ -41,9 +40,9 @@ class RotaryEmbreddings(nn.Module):
     def __init__(self, embed_dim, max_len=5000):
         super().__init__()
         inv_freq = torch.exp(
-            -math.log(max_len) * torch.arange(0, embed_dim, 2) / embed_dim
+            -math.log(max_len) * torch.arange(0, embed_dim, 2, dtype=torch.bfloat16) / embed_dim
         )
-        t = torch.arange(max_len, dtype=torch.float)
+        t = torch.arange(max_len, dtype=torch.bfloat16)
         freqs = torch.einsum("i,j->ij", t, inv_freq)
         freqs = torch.cat((freqs, freqs), dim=-1)
         cos = torch.cos(freqs)
@@ -83,6 +82,7 @@ class DecoderLayer(nn.Module):
             num_heads=self.num_heads,
             dropout=self.p,
             batch_first=True,
+            dtype=torch.bfloat16,
         )
 
         self.multihead = nn.MultiheadAttention(
@@ -90,6 +90,7 @@ class DecoderLayer(nn.Module):
             num_heads=self.num_heads,
             dropout=self.p,
             batch_first=True,
+            dtype=torch.bfloat16,
         )
 
         self.dropout = nn.Dropout(p=self.p, inplace=False)
@@ -102,8 +103,8 @@ class DecoderLayer(nn.Module):
         self.norm3 = RMSNorm(self.hidden_dim)
         self.activation = activation()
 
-        self.linear1 = nn.Linear(self.hidden_dim, 4 * self.hidden_dim, bias=True)
-        self.linear2 = nn.Linear(4 * self.hidden_dim, self.hidden_dim, bias=True)
+        self.linear1 = nn.Linear(self.hidden_dim, 4 * self.hidden_dim, bias=True, dtype=torch.bfloat16)
+        self.linear2 = nn.Linear(4 * self.hidden_dim, self.hidden_dim, bias=True, dtype=torch.bfloat16)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -134,7 +135,7 @@ class BoutiqueLM(nn.Module):
         num_heads,
         hidden_dim,
         max_len,
-        dropout=0.1,
+        dropout=0,
         activation=nn.ReLU,
     ):
         super().__init__()
@@ -142,7 +143,7 @@ class BoutiqueLM(nn.Module):
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
         self.max_len = max_len
-        self.embeds = nn.Embedding(self.vocab_stories_size, self.hidden_dim)
+        self.embeds = nn.Embedding(self.vocab_stories_size, self.hidden_dim, dtype=torch.bfloat16)
 
         self.positional_encoding = RotaryEmbreddings(
             embed_dim=self.hidden_dim, max_len=self.max_len
@@ -161,7 +162,7 @@ class BoutiqueLM(nn.Module):
         )
 
         self.classifier = nn.Linear(
-            self.hidden_dim, self.vocab_stories_size, bias=False
+            self.hidden_dim, self.vocab_stories_size, bias=False, dtype=torch.bfloat16,
         )
 
     def forward(self, tokens_story, attention_mask=None):
@@ -169,4 +170,4 @@ class BoutiqueLM(nn.Module):
         qk = self.positional_encoding(x)
         for i in range(self.num_layers):
             x = self.decoders[i](qk, qk, x, attn_mask=attention_mask)
-        return F.softmax(self.classifier(x), dim=1)
+        return self.classifier(x)
