@@ -36,19 +36,15 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def train_epoch(model, optimizer, tokenizer, loader, scheduler=None, device="cpu"):
+def train_epoch(model, optimizer, loader, scheduler=None, device="cpu"):
     model.train()
     loss_m = AverageMeter()
     epoch_lrs = []
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     loss = 0
     for stories in tqdm(loader):
-        tokens_story = [
-            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)[:256]
-            for story in stories
-        ]
         padded_tokens_story = nn.utils.rnn.pad_sequence(
-            tokens_story, batch_first=True, padding_value=0
+            stories, batch_first=True, padding_value=0
         ).to(device)
         attention_story_mask = generate_attention_mask(
             padded_tokens_story.shape[1] - 1, device=device
@@ -68,17 +64,13 @@ def train_epoch(model, optimizer, tokenizer, loader, scheduler=None, device="cpu
 
 
 @torch.no_grad()
-def val_epoch(model, tokenizer, loader, device="cpu"):
+def val_epoch(model, loader, device="cpu"):
     model.eval()
     loss_m = AverageMeter()
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     for stories in tqdm(loader):
-        tokens_story = [
-            torch.tensor(tokenizer.encode(story, add_bos=True), dtype=torch.long)[:256]
-            for story in stories
-        ]
         padded_tokens_story = nn.utils.rnn.pad_sequence(
-            tokens_story, batch_first=True, padding_value=0
+            stories, batch_first=True, padding_value=0
         ).to(device)
         attention_story_mask = generate_attention_mask(
             padded_tokens_story.shape[1] - 1, device=device
@@ -111,7 +103,6 @@ def train(
     model,
     num_epochs,
     optimizer,
-    tokenizer,
     scheduler,
     train_loader,
     val_loader,
@@ -124,11 +115,11 @@ def train(
     for i in range(num_epochs):
         # run train epoch
         train_loss, epoch_lrs = train_epoch(
-            model, optimizer, tokenizer, train_loader, scheduler, device
+            model, optimizer, train_loader, scheduler, device
         )
         train_losses.append(train_loss)
         # run val epoch
-        val_loss = val_epoch(model, tokenizer, val_loader, device)
+        val_loss = val_epoch(model, val_loader, device)
         val_losses.append(val_loss)
         # update lr
         lrs += epoch_lrs
