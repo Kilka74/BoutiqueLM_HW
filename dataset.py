@@ -1,5 +1,4 @@
 import json
-import torch
 from tqdm import tqdm
 from torch.utils.data import Dataset
 import numpy as np
