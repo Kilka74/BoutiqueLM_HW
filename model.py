@@ -85,22 +85,12 @@ class DecoderLayer(nn.Module):
             dtype=torch.bfloat16,
         )
 
-        # self.multihead = nn.MultiheadAttention(
-        #     embed_dim=self.hidden_dim,
-        #     num_heads=self.num_heads,
-        #     dropout=self.p,
-        #     batch_first=True,
-        #     dtype=torch.bfloat16,
-        # )
-
         self.dropout = nn.Dropout(p=self.p, inplace=False)
         self.dropout1 = nn.Dropout(p=self.p, inplace=False)
         self.dropout2 = nn.Dropout(p=self.p, inplace=False)
-        # self.dropout3 = nn.Dropout(p=self.p, inplace=False)
 
         self.norm1 = RMSNorm(self.hidden_dim)
         self.norm2 = RMSNorm(self.hidden_dim)
-        # self.norm3 = RMSNorm(self.hidden_dim)
         self.activation = activation()
 
         self.linear1 = nn.Linear(self.hidden_dim, 4 * self.hidden_dim, bias=True, dtype=torch.bfloat16)
@@ -116,11 +106,9 @@ class DecoderLayer(nn.Module):
 
     def forward(self, q, k, v, attn_mask):
         res = self.dropout(self.masked_multihead(q, k, v, attn_mask=attn_mask)[0])
-        res = self.norm1(res + v)
-        # res = self.norm2(res + self.dropout1(self.multihead(q, k, res)[0]))
-        res = self.norm2(
-            res
-            + self.dropout2(
+        res = self.norm1(res) + v
+        res = res + self.norm2(
+            self.dropout2(
                 self.linear2(self.activation(self.dropout1(self.linear1(res))))
             )
         )

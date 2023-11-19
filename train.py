@@ -131,3 +131,16 @@ def train(
 
         clear_output()
         plot_history(train_losses, val_losses, lrs)
+
+
+def generate_story(model, tokenizer, beginning, story_length):
+    model.eval()
+    eos_idx = tokenizer.eos_id
+    input_tokens = torch.tensor(tokenizer.encode(beginning, add_eos=True), dtype=torch.long)
+    for i in range(story_length):
+        pred_token = torch.argmax(model(input_tokens.unsqueeze(0))[:, -1])
+        if pred_token == eos_idx:
+            break
+        else:
+            input_tokens = torch.tensor(input_tokens.tolist() + [pred_token], dtype=torch.long)
+    return tokenizer.decode(input_tokens.squeeze(0).tolist())
