@@ -4,10 +4,11 @@ import torch.nn as nn
 import wandb
 from IPython.display import clear_output
 from tqdm import tqdm
+import torch.nn.functional as F
 
 
 def generate_attention_mask(size, device="cpu"):
-    mask = torch.tril(torch.ones(size, size, device=device, dtype=torch.bfloat16))
+    mask = torch.tril(torch.ones(size, size, device=device, dtype=torch.float))
     mask = (
         mask.float()
         .masked_fill(mask == 0, float("-inf"))
@@ -36,30 +37,44 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def train_epoch(model, optimizer, loader, scheduler=None, device="cpu"):
+def train_epoch(model, optimizer, loader, scheduler=None, device="cpu", scaler=torch.cuda.amp.GradScaler()):
     model.train()
     loss_m = AverageMeter()
     epoch_lrs = []
+    accum_iter = 4
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     loss = 0
-    for stories in tqdm(loader):
-        padded_tokens_story = nn.utils.rnn.pad_sequence(
-            stories, batch_first=True, padding_value=0
-        ).to(device)
-        attention_story_mask = generate_attention_mask(
-            padded_tokens_story.shape[1] - 1, device=device
-        )
-        outputs = model(padded_tokens_story[..., :-1], attention_story_mask)
-        loss = criterion(outputs.transpose(1, 2), padded_tokens_story[..., 1:])
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        loss_m.update(loss.item(), padded_tokens_story.shape[0])
-        epoch_lrs += [optimizer.param_groups[0]["lr"]]
-        if scheduler is not None:
-            scheduler.step()
-        # update stats
-        # we use step-wise scheduler
+    for batch_idx, stories in tqdm(enumerate(loader)):
+#         print(stories.get_device())
+        with torch.set_grad_enabled(True):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                stories = stories.long().to(device)
+                
+                attention_story_mask = generate_attention_mask(
+                    stories.shape[1] - 1, device=device
+                )
+                outputs = model(stories[..., :-1], attention_story_mask)
+                loss = criterion(outputs.transpose(1, 2), stories[..., 1:])
+            loss_m.update(loss.item(), stories.shape[0])
+            
+            loss = loss / accum_iter
+#             loss.bacward()
+            scaler.scale(loss).backward()
+            
+            if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(loader)):
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
+                scaler.step(optimizer)
+                scaler.update()
+#                 optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                if scheduler is not None:
+                    scheduler.step()
+
+                epoch_lrs += [optimizer.param_groups[0]["lr"]]
+
+                # update stats
+                # we use step-wise scheduler
     return loss_m.avg, epoch_lrs
 
 
@@ -69,16 +84,15 @@ def val_epoch(model, loader, device="cpu"):
     loss_m = AverageMeter()
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     for stories in tqdm(loader):
-        padded_tokens_story = nn.utils.rnn.pad_sequence(
-            stories, batch_first=True, padding_value=0
-        ).to(device)
-        attention_story_mask = generate_attention_mask(
-            padded_tokens_story.shape[1] - 1, device=device
-        )
-        outputs = model(padded_tokens_story[..., :-1], attention_story_mask)
-        loss = criterion(outputs.transpose(1, 2), padded_tokens_story[..., 1:])
-        # update stats
-        loss_m.update(loss.item(), padded_tokens_story.shape[0])
+        stories = stories.long().to(device)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            attention_story_mask = generate_attention_mask(
+                stories.shape[1] - 1, device=device
+            )
+            outputs = model(stories[..., :-1], attention_story_mask)
+            loss = criterion(outputs.transpose(1, 2), stories[..., 1:].long())
+            # update stats
+            loss_m.update(loss.item(), stories.shape[0])
     return loss_m.avg
 
 
@@ -109,13 +123,14 @@ def train(
     wandb_log=False,
     device="cpu",
 ):
+    scaler = torch.cuda.amp.GradScaler()
     train_losses = []
     val_losses = []
     lrs = []
     for i in range(num_epochs):
         # run train epoch
         train_loss, epoch_lrs = train_epoch(
-            model, optimizer, train_loader, scheduler, device
+            model, optimizer, train_loader, scheduler, device, scaler
         )
         train_losses.append(train_loss)
         # run val epoch
@@ -132,13 +147,29 @@ def train(
         clear_output()
         plot_history(train_losses, val_losses, lrs)
 
-
-def generate_story(model, tokenizer, beginning, story_length):
+    
+def generate_story_argmax(model, tokenizer, beginning, story_length):
     model.eval()
     eos_idx = tokenizer.eos_id
     input_tokens = torch.tensor(tokenizer.encode(beginning, add_eos=True), dtype=torch.long)
     for i in range(story_length):
         pred_token = torch.argmax(model(input_tokens.unsqueeze(0))[:, -1])
+        if pred_token == eos_idx:
+            break
+        else:
+            input_tokens = torch.tensor(input_tokens.tolist() + [pred_token], dtype=torch.long)
+    return tokenizer.decode(input_tokens.squeeze(0).tolist())
+
+
+def generate_story_temp(model, tokenizer, beginning, story_length, k, tau):
+    model.eval()
+    eos_idx = tokenizer.eos_id
+    input_tokens = torch.tensor(tokenizer.encode(beginning, add_eos=True), dtype=torch.long)
+    for i in range(story_length):
+        pred_tokens = model(input_tokens.unsqueeze(0))[:, -1]
+        tokens = torch.argsort(pred_tokens, descending=True)[0, :k]
+        probs = F.softmax(pred_tokens[0, tokens] / tau)
+        pred_token = tokens[torch.multinomial(probs, 1)]
         if pred_token == eos_idx:
             break
         else:

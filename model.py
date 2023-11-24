@@ -155,7 +155,8 @@ class BoutiqueLM(nn.Module):
 
     def forward(self, tokens_story, attention_mask=None):
         x = self.embeds(tokens_story)
-        qk = self.positional_encoding(x)
         for i in range(self.num_layers):
+            qk = self.positional_encoding(x)
+            
             x = self.decoders[i](qk, qk, x, attn_mask=attention_mask)
         return self.classifier(x)
