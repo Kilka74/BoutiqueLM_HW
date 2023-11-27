@@ -59,7 +59,7 @@ class RotaryEmbreddings(nn.Module):
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, d, eps=1e-8):
+    def __init__(self, d, eps=1e-5):
         super().__init__()
         self.d = d
         self.eps = eps
@@ -85,6 +85,10 @@ class DecoderLayer(nn.Module):
             dtype=torch.bfloat16,
         )
 
+        self.positional_encoding = RotaryEmbreddings(
+            embed_dim=self.hidden_dim, max_len=self.max_len
+        )
+
         self.dropout = nn.Dropout(p=self.p, inplace=False)
         self.dropout1 = nn.Dropout(p=self.p, inplace=False)
         self.dropout2 = nn.Dropout(p=self.p, inplace=False)
@@ -104,14 +108,11 @@ class DecoderLayer(nn.Module):
                 if layer.bias is not None:
                     layer.bias.data.fill_(0)
 
-    def forward(self, q, k, v, attn_mask):
-        res = self.dropout(self.masked_multihead(q, k, v, attn_mask=attn_mask)[0])
-        res = self.norm1(res) + v
-        res = res + self.norm2(
-            self.dropout2(
-                self.linear2(self.activation(self.dropout1(self.linear1(res))))
-            )
-        )
+    def forward(self, x, attn_mask):
+        x = self.norm1(x)
+        qk = self.positional_encoding(x)
+        res = self.dropout(self.masked_multihead(qk, qk, x, attn_mask=attn_mask)[0]) + x
+        res = res + self.dropout2(self.linear2(self.activation(self.dropout1(self.linear1(self.norm2(res))))))
         return res
 
 
@@ -133,10 +134,6 @@ class BoutiqueLM(nn.Module):
         self.max_len = max_len
         self.embeds = nn.Embedding(self.vocab_stories_size, self.hidden_dim, dtype=torch.bfloat16)
 
-        self.positional_encoding = RotaryEmbreddings(
-            embed_dim=self.hidden_dim, max_len=self.max_len
-        )
-
         self.decoders = nn.ModuleList(
             [
                 DecoderLayer(
@@ -156,7 +153,5 @@ class BoutiqueLM(nn.Module):
     def forward(self, tokens_story, attention_mask=None):
         x = self.embeds(tokens_story)
         for i in range(self.num_layers):
-            qk = self.positional_encoding(x)
-            
-            x = self.decoders[i](qk, qk, x, attn_mask=attention_mask)
+            x = self.decoders[i](x, attn_mask=attention_mask)
         return self.classifier(x)

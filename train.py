@@ -37,7 +37,14 @@ class AverageMeter:
         self.avg = self.sum / self.count
 
 
-def train_epoch(model, optimizer, loader, scheduler=None, device="cpu", scaler=torch.cuda.amp.GradScaler()):
+def train_epoch(
+    model,
+    optimizer,
+    loader,
+    scheduler=None,
+    device="cpu",
+    scaler=torch.cuda.amp.GradScaler(),
+):
     model.train()
     loss_m = AverageMeter()
     epoch_lrs = []
@@ -45,28 +52,26 @@ def train_epoch(model, optimizer, loader, scheduler=None, device="cpu", scaler=t
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     loss = 0
     for batch_idx, stories in tqdm(enumerate(loader)):
-#         print(stories.get_device())
+        #         print(stories.get_device())
         with torch.set_grad_enabled(True):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 stories = stories.long().to(device)
-                
+
                 attention_story_mask = generate_attention_mask(
                     stories.shape[1] - 1, device=device
                 )
                 outputs = model(stories[..., :-1], attention_story_mask)
                 loss = criterion(outputs.transpose(1, 2), stories[..., 1:])
             loss_m.update(loss.item(), stories.shape[0])
-            
+
             loss = loss / accum_iter
-#             loss.bacward()
+            #             loss.bacward()
             scaler.scale(loss).backward()
-            
+
             if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(loader)):
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
                 scaler.step(optimizer)
                 scaler.update()
-#                 optimizer.step()
+                #                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 if scheduler is not None:
                     scheduler.step()
@@ -147,24 +152,30 @@ def train(
         clear_output()
         plot_history(train_losses, val_losses, lrs)
 
-    
+
 def generate_story_argmax(model, tokenizer, beginning, story_length):
     model.eval()
     eos_idx = tokenizer.eos_id
-    input_tokens = torch.tensor(tokenizer.encode(beginning, add_eos=True), dtype=torch.long)
+    input_tokens = torch.tensor(
+        tokenizer.encode(beginning, add_eos=True), dtype=torch.long
+    )
     for i in range(story_length):
         pred_token = torch.argmax(model(input_tokens.unsqueeze(0))[:, -1])
         if pred_token == eos_idx:
             break
         else:
-            input_tokens = torch.tensor(input_tokens.tolist() + [pred_token], dtype=torch.long)
+            input_tokens = torch.tensor(
+                input_tokens.tolist() + [pred_token], dtype=torch.long
+            )
     return tokenizer.decode(input_tokens.squeeze(0).tolist())
 
 
 def generate_story_temp(model, tokenizer, beginning, story_length, k, tau):
     model.eval()
     eos_idx = tokenizer.eos_id
-    input_tokens = torch.tensor(tokenizer.encode(beginning, add_eos=True), dtype=torch.long)
+    input_tokens = torch.tensor(
+        tokenizer.encode(beginning, add_eos=True), dtype=torch.long
+    )
     for i in range(story_length):
         pred_tokens = model(input_tokens.unsqueeze(0))[:, -1]
         tokens = torch.argsort(pred_tokens, descending=True)[0, :k]
@@ -173,5 +184,7 @@ def generate_story_temp(model, tokenizer, beginning, story_length, k, tau):
         if pred_token == eos_idx:
             break
         else:
-            input_tokens = torch.tensor(input_tokens.tolist() + [pred_token], dtype=torch.long)
+            input_tokens = torch.tensor(
+                input_tokens.tolist() + [pred_token], dtype=torch.long
+            )
     return tokenizer.decode(input_tokens.squeeze(0).tolist())
