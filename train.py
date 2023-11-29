@@ -50,10 +50,12 @@ def train_epoch(
     loss_m = AverageMeter()
     epoch_lrs = []
     accum_iter = 4
+    log_iter = 100
     criterion = nn.CrossEntropyLoss(ignore_index=0)
     loss = 0
     for batch_idx, stories in tqdm(enumerate(loader)):
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
             stories = stories.long().to(device)
 
             attention_story_mask = generate_attention_mask(
@@ -64,24 +66,24 @@ def train_epoch(
         loss_m.update(loss.item(), stories.shape[0])
 
         loss = loss / accum_iter
-        #             loss.bacward()
         scaler.scale(loss).backward()
         if ((batch_idx + 1) % accum_iter == 0) or (batch_idx + 1 == len(loader)):
             scaler.step(optimizer)
             scaler.update()
-            #                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             if scheduler is not None:
                 scheduler.step()
 
             epoch_lrs += [optimizer.param_groups[0]["lr"]]
+        if (batch_idx + 1) % log_iter == 0:
             if wandb_log:
                 wandb.log(
-                    {"train_loss": loss_m.avg, "lr": optimizer.param_groups[0]["lr"]}
+                    {
+                        "train_loss": loss.item() * accum_iter,
+                        "lr": optimizer.param_groups[0]["lr"],
+                    }
                 )
 
-            # update stats
-            # we use step-wise scheduler
     return loss_m.avg, epoch_lrs
 
 
@@ -90,16 +92,18 @@ def val_epoch(model, loader, device="cpu", wandb_log=False):
     model.eval()
     loss_m = AverageMeter()
     criterion = nn.CrossEntropyLoss(ignore_index=0)
+    loss = 0
     for stories in tqdm(loader):
         stories = stories.long().to(device)
-        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
             attention_story_mask = generate_attention_mask(
                 stories.shape[1] - 1, device=device
             )
             outputs = model(stories[..., :-1], attention_story_mask)
             loss = criterion(outputs.transpose(1, 2), stories[..., 1:].long())
-            # update stats
-            loss_m.update(loss.item(), stories.shape[0])
+        loss_m.update(loss.item(), stories.shape[0])
+
     if wandb_log:
         wandb.log({"val_loss": loss_m.avg})
     return loss_m.avg
@@ -147,11 +151,6 @@ def train(
         val_losses.append(val_loss)
         # update lr
         lrs += epoch_lrs
-
-        # if wandb_log:
-        #     wandb.log(
-        #         {"train_loss": train_loss, "val_loss": val_loss, "lr": epoch_lrs[0]}
-        #     )
 
         clear_output()
         plot_history(train_losses, val_losses, lrs)

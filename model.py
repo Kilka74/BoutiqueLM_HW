@@ -3,18 +3,20 @@ import torch
 from torch import nn as nn
 
 
-def scaled_softmax_attention(query, key, value, mask):
+def scaled_softmax_attention(query, key, value, mask=None):
     """
     Args:
         query: torch.Tensor (..., L, D)
         key: torch.Tensor (..., L, D)
         value: torch.Tensor (..., L, D)
     Returns:
-        res: torch.Tensor (..., L, D), output of the attention layer (\softmax(Q K^T / d) V
-        attention: torch.Tensor (..., L, L), attention weights (\softmax(Q K^T / d))
+        res: torch.Tensor (..., L, D), output of the attention layer (softmax(Q K^T / d) V
+        attention: torch.Tensor (..., L, L), attention weights (softmax(Q K^T / d))
 
     L is the length of sequence, D is the embedding dimension
     """
+    if mask is None:
+        mask = torch.zeros(query.shape[-2], query.shape[-2])
     attention = torch.softmax(
         torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.shape[-1]) + mask,
         dim=-1,
@@ -60,14 +62,15 @@ class Rotary(torch.nn.Module):
         self.cos_cached = None
         self.sin_cached = None
 
-    def forward(self, seq_len):
+    def forward(self, x):
+        seq_len = x.shape[1]
         if seq_len != self.seq_len_cached:
             self.seq_len_cached = seq_len
             t = torch.arange(seq_len).type_as(self.inv_freq)
             freqs = torch.einsum("i,j->ij", t, self.inv_freq)
             emb = torch.cat((freqs, freqs), dim=-1)
-            self.cos_cached = emb.cos()[None, None, :, :]
-            self.sin_cached = emb.sin()[None, None, :, :]
+            self.cos_cached = emb.cos()[None, None, :, :].to(x.device)
+            self.sin_cached = emb.sin()[None, None, :, :].to(x.device)
         return self.cos_cached, self.sin_cached
 
 
@@ -127,7 +130,7 @@ class MultiheadAttention(nn.Module):
                 if layer.bias is not None:
                     layer.bias.data.fill_(0)
 
-    def forward(self, x, cos, sin, mask):
+    def forward(self, x, cos, sin, mask=None):
         """
         Args:
             x: torch.Tensor (B, L, D)
@@ -150,7 +153,10 @@ class MultiheadAttention(nn.Module):
         # qs, ks, vs: (batch, heads, seq_len, hidden // heads)
         # apply rotary embeds to query and key
         qs, ks = apply_rotary_pos_emb(qs, ks, cos, sin)
-        outputs = scaled_softmax_attention(qs, ks, vs, mask).transpose(1, 2)
+        #         outputs = scaled_softmax_attention(qs, ks, vs, mask).transpose(1, 2)
+        outputs = nn.functional.scaled_dot_product_attention(
+            qs, ks, vs, is_causal=True
+        ).transpose(1, 2)
         outputs = self.o_proj(torch.reshape(outputs, x.shape))
         return outputs
 
@@ -193,7 +199,7 @@ class DecoderLayer(nn.Module):
                 if layer.bias is not None:
                     layer.bias.data.fill_(0)
 
-    def forward(self, x, cos, sin, attn_mask):
+    def forward(self, x, cos, sin, attn_mask=None):
         x = self.norm1(x)
         res = self.dropout(self.masked_multihead(x, cos, sin, mask=attn_mask)) + x
         res = res + self.dropout2(
@@ -234,7 +240,6 @@ class BoutiqueLM(nn.Module):
         self.positional_encoding = Rotary(
             dim=self.hidden_dim // num_heads, base=max_len
         )
-
         self.classifier = nn.Linear(
             self.hidden_dim,
             self.vocab_stories_size,
@@ -243,7 +248,7 @@ class BoutiqueLM(nn.Module):
 
     def forward(self, tokens_story, attention_mask=None):
         x = self.embeds(tokens_story)
-        _, _ = self.positional_encoding(x.shape[1])
+        _, _ = self.positional_encoding(x)
         for i in range(self.num_layers):
             x = self.decoders[i](
                 x,
