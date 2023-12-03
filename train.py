@@ -17,7 +17,6 @@ def generate_attention_mask(size, device="cpu"):
     return mask
 
 
-# useful utility class for computing averages
 class AverageMeter:
     """Computes and stores the average and current value"""
 
@@ -55,7 +54,6 @@ def train_epoch(
     loss = 0
     for batch_idx, stories in tqdm(enumerate(loader)):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
             stories = stories.long().to(device)
 
             attention_story_mask = generate_attention_mask(
@@ -78,10 +76,7 @@ def train_epoch(
         if (batch_idx + 1) % log_iter == 0:
             if wandb_log:
                 wandb.log(
-                    {
-                        "train_loss": loss.item() * accum_iter,
-                        "lr": optimizer.param_groups[0]["lr"],
-                    }
+                    {"train_loss": loss.item() * accum_iter, "lr": optimizer.param_groups[0]["lr"]}
                 )
 
     return loss_m.avg, epoch_lrs
@@ -96,14 +91,12 @@ def val_epoch(model, loader, device="cpu", wandb_log=False):
     for stories in tqdm(loader):
         stories = stories.long().to(device)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=False):
             attention_story_mask = generate_attention_mask(
                 stories.shape[1] - 1, device=device
             )
             outputs = model(stories[..., :-1], attention_story_mask)
             loss = criterion(outputs.transpose(1, 2), stories[..., 1:].long())
         loss_m.update(loss.item(), stories.shape[0])
-
     if wandb_log:
         wandb.log({"val_loss": loss_m.avg})
     return loss_m.avg
@@ -141,15 +134,12 @@ def train(
     val_losses = []
     lrs = []
     for i in range(num_epochs):
-        # run train epoch
         train_loss, epoch_lrs = train_epoch(
             model, optimizer, train_loader, scheduler, device, scaler, wandb_log
         )
         train_losses.append(train_loss)
-        # run val epoch
         val_loss = val_epoch(model, val_loader, device, wandb_log)
         val_losses.append(val_loss)
-        # update lr
         lrs += epoch_lrs
 
         clear_output()
@@ -158,7 +148,7 @@ def train(
 
 def generate_story_argmax(model, tokenizer, beginning, story_length):
     model.eval()
-    eos_idx = tokenizer.eos_id
+    eos_idx = tokenizer.eos_id()
     input_tokens = torch.tensor(
         tokenizer.encode(beginning, add_bos=True), dtype=torch.long
     )
@@ -173,29 +163,24 @@ def generate_story_argmax(model, tokenizer, beginning, story_length):
     return tokenizer.decode(input_tokens.squeeze(0).tolist())
 
 
-def generate_story_temp(model, tokenizer, beginning, story_length, k, tau):
+@torch.no_grad()
+def generate_story_argmax_huggingface(model, tokenizer, prefix, max_len):
     model.eval()
-    eos_idx = tokenizer.eos_id
-    input_tokens = torch.tensor(
-        tokenizer.encode(beginning, add_eos=True), dtype=torch.long
-    )
-    for i in range(story_length):
-        pred_tokens = model(input_tokens.unsqueeze(0))[:, -1]
-        tokens = torch.argsort(pred_tokens, descending=True)[0, :k]
-        probs = F.softmax(pred_tokens[0, tokens] / tau, dim=-1)
-        pred_token = tokens[torch.multinomial(probs, 1)]
+    eos_idx = tokenizer.eos_token_id
+    inputs = tokenizer(prefix, return_tensors="pt")
+    for i in range(max_len):
+        logits = model(**inputs).logits
+        pred_token = torch.argmax(logits[:, -1, :])
+        inputs["input_ids"] = torch.cat((inputs["input_ids"], torch.tensor([pred_token])[:, None]), dim=-1)
+        inputs["attention_mask"] = torch.cat((inputs["attention_mask"], torch.tensor([1])[:, None]), dim=-1)
         if pred_token == eos_idx:
             break
-        else:
-            input_tokens = torch.tensor(
-                input_tokens.tolist() + [pred_token], dtype=torch.long
-            )
-    return tokenizer.decode(input_tokens.squeeze(0).tolist())
+    return tokenizer.decode(inputs["input_ids"][0])
 
 
 @torch.no_grad()
 def generate_nucleus(
-    model, tokenizer, batch_size: int, prefix, max_len=32, nucleus=0.9, tau=1
+    model, tokenizer, prefix, max_len=32, nucleus=0.9, tau=1
 ):
     """
     Samples output sequence from probability distribution obtained by model
@@ -214,17 +199,43 @@ def generate_nucleus(
     prefix = torch.tensor(
         tokenizer.encode(prefix, add_eos=False), dtype=torch.long
     ).unsqueeze(0)
-    print(prefix)
     for i in range(max_len):
         probs = F.softmax(model(prefix)[:, -1, :] / tau, dim=1)
         argsorted = torch.argsort(probs, dim=1)
         sorted_probs = probs[
-            torch.arange(batch_size)[:, None].repeat(1, probs.shape[1]), argsorted
+            torch.arange(1)[:, None].repeat(1, probs.shape[1]), argsorted
         ]
         sorted_probs[torch.cumsum(sorted_probs, dim=1) < 1 - nucleus] = 0
         sorted_probs = sorted_probs / sorted_probs.sum(dim=1)[:, None]
         next_tokens = argsorted[
-            torch.arange(batch_size), torch.multinomial(sorted_probs, 1).squeeze(1)
+            torch.arange(1), torch.multinomial(sorted_probs, 1).squeeze(1)
         ]
         prefix = torch.cat((prefix, next_tokens[:, None]), dim=-1)
+        if next_tokens[0] == tokenizer.eos_id():
+            break
     return tokenizer.decode(prefix.squeeze(0).tolist())
+
+
+@torch.no_grad()
+def generate_nucleus_huggingface(
+    model, tokenizer, prefix, max_len=32, nucleus=0.9, tau=1
+):
+    inputs = tokenizer(prefix, return_tensors="pt")
+    for i in range(max_len):
+        logits = model(**inputs).logits
+        probs = F.softmax(logits[:, -1, :] / tau, dim=1)
+        argsorted = torch.argsort(probs, dim=1)
+        sorted_probs = probs[
+            torch.arange(1)[:, None].repeat(1, probs.shape[1]), argsorted
+        ]
+        sorted_probs[torch.cumsum(sorted_probs, dim=1) < 1 - nucleus] = 0
+        sorted_probs = sorted_probs / sorted_probs.sum(dim=1)[:, None]
+        next_tokens = argsorted[
+            torch.arange(1), torch.multinomial(sorted_probs, 1).squeeze(1)
+        ]
+        inputs["input_ids"] = torch.cat((inputs["input_ids"], next_tokens[:, None]), dim=-1)
+        inputs["attention_mask"] = torch.cat((inputs["attention_mask"], torch.tensor([1])[:, None]), dim=-1)
+        if next_tokens[0] == tokenizer.eos_token_id:
+            break
+    return tokenizer.decode(inputs["input_ids"][0])
+    

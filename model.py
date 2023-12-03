@@ -10,8 +10,8 @@ def scaled_softmax_attention(query, key, value, mask=None):
         key: torch.Tensor (..., L, D)
         value: torch.Tensor (..., L, D)
     Returns:
-        res: torch.Tensor (..., L, D), output of the attention layer (softmax(Q K^T / d) V
-        attention: torch.Tensor (..., L, L), attention weights (softmax(Q K^T / d))
+        res: torch.Tensor (..., L, D), output of the attention layer (\softmax(Q K^T / d) V
+        attention: torch.Tensor (..., L, L), attention weights (\softmax(Q K^T / d))
 
     L is the length of sequence, D is the embedding dimension
     """
@@ -25,34 +25,7 @@ def scaled_softmax_attention(query, key, value, mask=None):
     return res
 
 
-# class PositionalEncoding(nn.Module):
-#     def __init__(self, embed_dim, max_len: int = 5000):
-#         """
-#         Inputs
-#             embed_dim - Hidden dimensionality of the input.
-#             max_len - Maximum length of a sequence to expect.
-#         """
-#         super().__init__()
-#         # TODO
-#         # here should be a tensor of size (1, max_len, embed_dim), dummy dimension is needed for proper addition
-#         pe = torch.empty(max_len, embed_dim)
-#         positions = torch.arange(0, max_len).unsqueeze(1)
-#         indices = torch.exp(
-#             torch.arange(0, embed_dim, 2).unsqueeze(0) * -math.log(max_len) / embed_dim
-#         ).unsqueeze(0)
-#         pe[:, ::2] = torch.sin(positions * indices)
-#         pe[:, 1::2] = torch.cos(positions * indices)
-#         pe = pe.unsqueeze(0)
-
-#         # register_buffer => Tensor which is not a parameter, but should be part of the modules state.
-#         # Used for tensors that need to be on the same device as the module.
-#         # persistent=False tells PyTorch to not add the buffer to the state dict (e.g. when we save the model)
-#         self.register_buffer("pe", pe, persistent=False)
-
-#     def forward(self, x):
-#         return x + self.pe[:, : x.shape[1], :]
-
-
+# https://blog.eleuther.ai/rotary-embeddings/
 class Rotary(torch.nn.Module):
     def __init__(self, dim, base=10000):
         super().__init__()
@@ -79,7 +52,7 @@ def rotate_half(x):
     x1, x2 = x[..., :x.shape[-1] // 2], x[..., x.shape[-1] // 2:]
     return torch.cat(
         (-x2, x1), dim=x1.ndim - 1
-    )  # dim=-1 triggers a bug in torch < 1.8.0
+    )
 
 
 @torch.jit.script
@@ -150,13 +123,9 @@ class MultiheadAttention(nn.Module):
         qs = torch.reshape(self.q_proj(x), size).transpose(1, 2)
         ks = torch.reshape(self.k_proj(x), size).transpose(1, 2)
         vs = torch.reshape(self.v_proj(x), size).transpose(1, 2)
-        # qs, ks, vs: (batch, heads, seq_len, hidden // heads)
         # apply rotary embeds to query and key
         qs, ks = apply_rotary_pos_emb(qs, ks, cos, sin)
-        #         outputs = scaled_softmax_attention(qs, ks, vs, mask).transpose(1, 2)
-        outputs = nn.functional.scaled_dot_product_attention(
-            qs, ks, vs, is_causal=True
-        ).transpose(1, 2)
+        outputs = nn.functional.scaled_dot_product_attention(qs, ks, vs, is_causal=True).transpose(1, 2)
         outputs = self.o_proj(torch.reshape(outputs, x.shape))
         return outputs
 
@@ -172,13 +141,6 @@ class DecoderLayer(nn.Module):
             embed_dim=self.hidden_dim,
             num_heads=num_heads,
         )
-
-        # self.masked_multihead = nn.MultiheadAttention(
-        #     embed_dim=self.hidden_dim,
-        #     num_heads=self.num_heads,
-        #     dropout=self.p,
-        #     batch_first=True,
-        # )
 
         self.dropout = nn.Dropout(p=self.p, inplace=False)
         self.dropout1 = nn.Dropout(p=self.p, inplace=False)

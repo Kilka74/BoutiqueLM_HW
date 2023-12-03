@@ -7,20 +7,12 @@ PAD_IDX = 0
 
 
 class TinyStoriesDataset(Dataset):
-    def __init__(
-        self,
-        files,
-        tokenizer,
-        dataset_size=None,
-        save_to_memory=False,
-        load_from_memory=False,
-        filename="",
-    ):
+    def __init__(self, files, tokenizer, dataset_size=None, save_to_memory=False, load_from_memory=False, filename=''):
         super().__init__()
         if not load_from_memory:
             corpus = []
             for file in files:
-                with open(f"jsons/{file}", "r") as j:
+                with open(f"jsons/{file}", 'r') as j:
                     stories = json.loads(j.readline())
                     for story in tqdm(stories):
                         corpus.append(
