@@ -1,28 +1,5 @@
-import math
 import torch
 from torch import nn as nn
-
-
-def scaled_softmax_attention(query, key, value, mask=None):
-    """
-    Args:
-        query: torch.Tensor (..., L, D)
-        key: torch.Tensor (..., L, D)
-        value: torch.Tensor (..., L, D)
-    Returns:
-        res: torch.Tensor (..., L, D), output of the attention layer (\softmax(Q K^T / d) V
-        attention: torch.Tensor (..., L, L), attention weights (\softmax(Q K^T / d))
-
-    L is the length of sequence, D is the embedding dimension
-    """
-    if mask is None:
-        mask = torch.zeros(query.shape[-2], query.shape[-2])
-    attention = torch.softmax(
-        torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(query.shape[-1]) + mask,
-        dim=-1,
-    )
-    res = torch.matmul(attention, value)
-    return res
 
 
 # https://blog.eleuther.ai/rotary-embeddings/

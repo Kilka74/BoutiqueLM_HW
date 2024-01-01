@@ -164,21 +164,6 @@ def generate_story_argmax(model, tokenizer, beginning, story_length):
 
 
 @torch.no_grad()
-def generate_story_argmax_huggingface(model, tokenizer, prefix, max_len):
-    model.eval()
-    eos_idx = tokenizer.eos_token_id
-    inputs = tokenizer(prefix, return_tensors="pt")
-    for i in range(max_len):
-        logits = model(**inputs).logits
-        pred_token = torch.argmax(logits[:, -1, :])
-        inputs["input_ids"] = torch.cat((inputs["input_ids"], torch.tensor([pred_token])[:, None]), dim=-1)
-        inputs["attention_mask"] = torch.cat((inputs["attention_mask"], torch.tensor([1])[:, None]), dim=-1)
-        if pred_token == eos_idx:
-            break
-    return tokenizer.decode(inputs["input_ids"][0])
-
-
-@torch.no_grad()
 def generate_nucleus(
     model, tokenizer, prefix, max_len=32, nucleus=0.9, tau=1
 ):
@@ -214,28 +199,3 @@ def generate_nucleus(
         if next_tokens[0] == tokenizer.eos_id():
             break
     return tokenizer.decode(prefix.squeeze(0).tolist())
-
-
-@torch.no_grad()
-def generate_nucleus_huggingface(
-    model, tokenizer, prefix, max_len=32, nucleus=0.9, tau=1
-):
-    inputs = tokenizer(prefix, return_tensors="pt")
-    for i in range(max_len):
-        logits = model(**inputs).logits
-        probs = F.softmax(logits[:, -1, :] / tau, dim=1)
-        argsorted = torch.argsort(probs, dim=1)
-        sorted_probs = probs[
-            torch.arange(1)[:, None].repeat(1, probs.shape[1]), argsorted
-        ]
-        sorted_probs[torch.cumsum(sorted_probs, dim=1) < 1 - nucleus] = 0
-        sorted_probs = sorted_probs / sorted_probs.sum(dim=1)[:, None]
-        next_tokens = argsorted[
-            torch.arange(1), torch.multinomial(sorted_probs, 1).squeeze(1)
-        ]
-        inputs["input_ids"] = torch.cat((inputs["input_ids"], next_tokens[:, None]), dim=-1)
-        inputs["attention_mask"] = torch.cat((inputs["attention_mask"], torch.tensor([1])[:, None]), dim=-1)
-        if next_tokens[0] == tokenizer.eos_token_id:
-            break
-    return tokenizer.decode(inputs["input_ids"][0])
-    
