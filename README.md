@@ -1,4 +1,4 @@
-This Repository contains a code to a model to train it on dataset like the [TinyStories paper](https://arxiv.org/abs/2305.07759). I implement pre-norm Transformer decoder with only Masked Self-Attention, like in original paper, add [Rotary Embeddings](https://blog.eleuther.ai/rotary-embeddings/) and [RMSNorm](https://arxiv.org/pdf/1910.07467.pdf). Also I set gradient accumulation equal to 4. Number of tokens the model was trained on was set to 5 billions.
+This Repository contains a code to a model to train it on dataset like the [TinyStories paper](https://arxiv.org/abs/2305.07759). I implement pre-norm Transformer decoder with only Masked Self-Attention, like in original paper, add [Rotary Embeddings](https://blog.eleuther.ai/rotary-embeddings/) and [RMSNorm](https://arxiv.org/pdf/1910.07467.pdf). Also I set gradient accumulation equal to 4. Number of tokens the model was trained on was set to 5 billions. For generating stories I've implemented nucleus sampling (see train.py)
 
 I have used following hyperparameters:
 
@@ -13,3 +13,5 @@ I have used following hyperparameters:
 | AdamW beta1                         | 0.9      |
 | AdamW beta2                         | 0.95     |
 | number of params of the final model | 30285824 |
+
+My Report and wandb logs are available [here](https://api.wandb.ai/links/kilka74/3he8f9sa) (in Russian)
